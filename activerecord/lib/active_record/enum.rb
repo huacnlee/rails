@@ -14,11 +14,15 @@ module ActiveRecord
   #   conversation.active!
   #   conversation.active? # => true
   #   conversation.status  # => "active"
+  #   conversation.status_name # => "In active"
+  #   conversation.status_value # => 0
   #
   #   # conversation.update! status: 1
   #   conversation.archived!
   #   conversation.archived? # => true
   #   conversation.status    # => "archived"
+  #   conversation.status_name # => "Archived"
+  #   conversation.status_value # => 1
   #
   #   # conversation.status = 1
   #   conversation.status = "archived"
@@ -73,6 +77,13 @@ module ActiveRecord
   #   Conversation.statuses[:active]    # => 0
   #   Conversation.statuses["archived"] # => 1
   #
+  # Or you can get value by use:
+  #
+  #   conversation = Conversation.new(status: :active)
+  #   conversation.status_value # => 0
+  #   conversation.status = :archived
+  #   conversation.status_value # => 1
+  #
   # Use that class method when you need to know the ordinal value of an enum.
   # For example, you can use that when manually building SQL strings:
   #
@@ -96,7 +107,31 @@ module ActiveRecord
   #
   #   conversation.comments_inactive!
   #   conversation.comments_active? # => false
-
+  #
+  # I18n for enum field names:
+  #
+  # config/locales/en.yml
+  #
+  #   en:
+  #     activerecord:
+  #       enums:
+  #         conversation:
+  #           status:
+  #             active: Active
+  #             archived: Archived
+  #           comments_status:
+  #             active: Active
+  #             inactive: Inactive
+  #
+  #   conversation.status_name # => "Active"
+  #   # conversation.update! status: 1
+  #   conversation.status_name # => "Archived"
+  #
+  # Get all options for select tag:
+  #
+  #    Conversation.status_options # => [["In active", "active"], ["Archived", "archived"]]
+  #    <%= f.select :status, Conversation.status_options %>
+  #
   module Enum
     def self.extended(base) # :nodoc:
       base.class_attribute(:defined_enums, instance_writer: false, default: {})
@@ -152,6 +187,8 @@ module ActiveRecord
       enum_prefix = definitions.delete(:_prefix)
       enum_suffix = definitions.delete(:_suffix)
       enum_scopes = definitions.delete(:_scopes)
+      locale_prefix = "activerecord.enums.#{klass.name&.singularize&.underscore}"
+
       definitions.each do |name, values|
         assert_valid_enum_definition_values(values)
         # statuses = { }
@@ -165,6 +202,28 @@ module ActiveRecord
 
         detect_enum_conflict!(name, name)
         detect_enum_conflict!(name, "#{name}=")
+
+        # def self.status_options; end
+        detect_enum_conflict!(name, "#{name}_options", true)
+        singleton_class.define_method("#{name}_options") do
+          self.send(name.pluralize).map do |k, _|
+            label = self.new(name => k).send("#{name}_name")
+            [label, k]
+          end
+        end
+
+        # def status_name; I18n.t("activerecord.enums.conversation.status.#{status}"); end
+        detect_enum_conflict!(name, "#{name}_name")
+        define_method("#{name}_name") do
+          return "" if self[name].nil?
+          I18n.t("#{locale_prefix}.#{name}.#{self[name]}", raise: true)
+        rescue I18n::MissingTranslationData
+          self[name].titleize
+        end
+
+        # def status_value; Conversation.statuses[self.status]; end
+        detect_enum_conflict!(name, "#{name}_value")
+        define_method("#{name}_value") { klass.send(name.pluralize)[self[name]] }
 
         attr = attribute_alias?(name) ? attribute_alias(name) : name
         decorate_attribute_type(attr, :enum) do |subtype|
